@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 
 const codePattern = /^[A-HJ-NP-Z2-9]{10}$/;
 const tiers = new Set(["初級", "中級", "上級"]);
+const carIds = new Set(["stella", "nova", "sora", "littleBanger"]);
 
 function normalize(value: unknown) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = await request.json() as { code?: unknown; carTier?: unknown; parts?: unknown; tickets?: unknown; challengeTier?: unknown };
   const code = normalize(body.code);
-  if (!codePattern.test(code) || !tiers.has(String(body.carTier)) || !tiers.has(String(body.challengeTier))) {
+  if (!codePattern.test(code) || !carIds.has(String(body.carTier)) || !tiers.has(String(body.challengeTier))) {
     return Response.json({ error: "保存内容が正しくありません。" }, { status: 400 });
   }
   const parts = body.parts as Record<string, unknown>;
