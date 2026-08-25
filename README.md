@@ -91,8 +91,13 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - `npm run dev`: start local development
 - `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
+- `npm test`: build the starter and verify its rendered pages
 - `npm run db:generate`: generate Drizzle migrations after schema changes
+- `npm run db:migrate:local`: apply the SQL files in `drizzle/` to the local
+  D1 database. `npm run dev` never runs migrations on its own, so routes
+  that touch D1 (e.g. `/api/garage-save`) fail with "no such table" until
+  this has been run at least once. Stop `npm run dev` before running it,
+  then start `npm run dev` again afterwards.
 
 ## Learn More
 
