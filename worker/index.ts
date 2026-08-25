@@ -2,17 +2,26 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 
-interface Env {
-  ASSETS: Fetcher;
-  DB: D1Database;
-  IMAGES: {
-    input(stream: ReadableStream): {
-      transform(options: Record<string, unknown>): {
-        output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
+declare global {
+  // Cloudflare's env binding types are merged via `Cloudflare.Env`, which
+  // requires a namespace here (see workers-types' own ambient declarations).
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Cloudflare {
+    interface Env {
+      ASSETS: Fetcher;
+      DB: D1Database;
+      IMAGES: {
+        input(stream: ReadableStream): {
+          transform(options: Record<string, unknown>): {
+            output(options: { format: string; quality: number }): Promise<{ response(): Response }>;
+          };
+        };
       };
-    };
-  };
+    }
+  }
 }
+
+type Env = Cloudflare.Env;
 
 interface ExecutionContext {
   waitUntil(promise: Promise<unknown>): void;
