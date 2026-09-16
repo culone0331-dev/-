@@ -265,52 +265,58 @@
   function renderHandoffPanel() {
     var conv = state.current;
     var wrap = el("div", { class: "card stack" });
-    var targetSel = el("select", {}, HANDOFF_TARGETS.map(function (p) {
-      return el("option", { value: p.key, text: p.label });
-    }));
-    var textBox = el("div", { class: "handoff-text", text: "「引き継ぎ文を作る」を押すと、ここに文章が表示されます。" });
-    var copied = false;
-
     wrap.appendChild(el("h2", { text: "この会話を渡す" }));
-    wrap.appendChild(el("div", {}, [el("label", { text: "送り先" }), targetSel]));
-    wrap.appendChild(textBox);
-    wrap.appendChild(el("div", { class: "btn-row" }, [
-      el("button", { class: "btn primary", text: "引き継ぎ文を作る", onclick: function () {
-        api("/api/conversations/" + conv.id + "/handoff", { method: "POST", body: { target: targetSel.value } })
-          .then(function (data) {
-            textBox.textContent = data.text;
-            copied = false;
-          });
-      }}),
-      el("button", { class: "btn secondary", text: "引き継ぎ文をコピー", onclick: function () {
-        if (!textBox.textContent || textBox.textContent.indexOf("引き継ぎ文を作る") !== -1) {
-          toast("先に「引き継ぎ文を作る」を押してください。");
-          return;
-        }
-        navigator.clipboard.writeText(textBox.textContent).then(function () {
-          copied = true;
-          toast("コピーしました。");
-        }).catch(function () {
-          toast("コピーに失敗しました。長押しで手動コピーしてください。");
+    wrap.appendChild(el("p", { text: "送り先をタップすると、引き継ぎ文のコピーとアプリを開くのが一度に終わります。" }));
+    view.appendChild(wrap);
+
+    var grid = el("div", { class: "btn-row" });
+    wrap.appendChild(grid);
+    var textBox = el("div", { class: "handoff-text", text: "送り先をタップすると、ここに引き継ぎ文が表示されます。" });
+
+    // 開き先URLを先に取得しておく（クリック時に同期でwindow.openできるように）
+    api("/api/destinations").then(function (data) {
+      state.destinations = data.destinations;
+      HANDOFF_TARGETS.forEach(function (t) {
+        var url = state.destinations[t.key];
+        var btn = el("button", {
+          class: "btn primary",
+          text: "→ " + t.label + "へ",
+          onclick: function () { oneTapHandoff(t, url, btn); },
         });
-      }}),
-    ]));
-    wrap.appendChild(el("div", { class: "btn-row" }, [
-      el("button", { class: "btn warn block", text: "コピー後に送り先を開く", onclick: function () {
-        api("/api/destinations").then(function (data) {
-          var url = data.destinations[targetSel.value];
+        grid.appendChild(btn);
+      });
+    });
+
+    function oneTapHandoff(target, url, btn) {
+      // ユーザー操作の直後にwindow.openを呼び、ポップアップブロックを避ける
+      var win = url ? window.open(url, "_blank", "noopener") : null;
+      btn.disabled = true;
+      api("/api/conversations/" + conv.id + "/handoff", { method: "POST", body: { target: target.key } })
+        .then(function (data) {
+          textBox.textContent = data.text;
+          return navigator.clipboard.writeText(data.text);
+        })
+        .then(function () {
           if (!url) {
-            toast("先に「設定」で開き先URLを登録してください。");
-            return;
+            toast(target.label + "の開き先が未登録です。文章はコピーしました。「設定」で登録してください。");
+          } else if (!win) {
+            toast("コピーしました。ポップアップがブロックされた場合は手動で" + target.label + "を開いてください。");
+          } else {
+            toast(target.label + "を開き、引き継ぎ文をコピーしました。");
           }
-          window.open(url, "_blank", "noopener");
-        });
-      }}),
+        })
+        .catch(function () {
+          toast("コピーに失敗しました。下の文章を長押しで手動コピーしてください。");
+        })
+        .finally(function () { btn.disabled = false; });
+    }
+
+    wrap.appendChild(el("div", {}, [
+      el("label", { text: "直前にコピーした内容" }),
+      textBox,
     ]));
     wrap.appendChild(el("p", { text: "URLはログイン済みの各サービスを開くだけです。本文の自動送信や既存チャットの自動選択はできません。開いた先に貼り付けて送信してください。" }));
     wrap.appendChild(el("button", { class: "btn ghost block", text: "閉じる", onclick: renderChat }));
-
-    view.appendChild(wrap);
   }
 
   // ---------- settings screen ----------
