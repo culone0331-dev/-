@@ -92,6 +92,11 @@
     renderNew();
   }
 
+  function goImportChatGPT() {
+    state.screen = "import-chatgpt";
+    renderImportChatGPT();
+  }
+
   function goChat(id) {
     api("/api/conversations/" + id).then(function (data) {
       state.current = data.conversation;
@@ -119,7 +124,10 @@
 
   function renderList() {
     clear();
-    view.appendChild(el("button", { class: "btn primary block", text: "＋ 新しい会話をはじめる", onclick: goNew }));
+    view.appendChild(el("div", { class: "btn-row" }, [
+      el("button", { class: "btn primary", text: "＋ 新しい会話をはじめる", onclick: goNew }),
+      el("button", { class: "btn secondary", text: "＋ ChatGPTから取り込む", onclick: goImportChatGPT }),
+    ]));
 
     if (state.conversations.length === 0) {
       view.appendChild(el("div", { class: "empty-state" }, [
@@ -186,6 +194,43 @@
 
     view.appendChild(el("h1", { text: "新しい会話" }));
     view.appendChild(form);
+  }
+
+  // ---------- import from ChatGPT screen ----------
+
+  function renderImportChatGPT() {
+    clear();
+    var titleInput = el("input", { type: "text", placeholder: "例：夕方の買い出しメモ" });
+    var pasteArea = el("textarea", { placeholder: "ChatGPTでまとめてもらった内容をここに貼り付け", rows: "10" });
+    var submitBtn = el("button", { class: "btn primary block", type: "submit", text: "取り込んで続ける" });
+
+    var form = el("form", { class: "stack", onsubmit: function (e) {
+      e.preventDefault();
+      var text = pasteArea.value.trim();
+      if (!text) { toast("貼り付ける内容を入力してください。"); return; }
+      submitBtn.disabled = true;
+      api("/api/conversations", { method: "POST", body: { title: titleInput.value, partner: "chatgpt" } })
+        .then(function (data) {
+          var convId = data.conversation.id;
+          return api("/api/conversations/" + convId + "/messages", { method: "POST", body: { text: text, role: "ai" } });
+        })
+        .then(function (data) {
+          state.current = data.conversation;
+          state.screen = "chat";
+          renderChat();
+        })
+        .finally(function () { submitBtn.disabled = false; });
+    }}, [
+      el("div", {}, [el("label", { text: "会話名（あとから変えなくてOK）" }), titleInput]),
+      el("div", {}, [el("label", { text: "ChatGPTの内容" }), pasteArea]),
+      submitBtn,
+      el("button", { class: "btn ghost block", type: "button", text: "← 受信箱に戻る", onclick: goList }),
+    ]);
+
+    view.appendChild(el("h1", { text: "ChatGPTから取り込む" }));
+    view.appendChild(el("p", { text: "ChatGPTで話した内容を「これを引き継ぐ用にまとめて」と頼み、出てきた文章をコピーしてここに貼り付けてください。共有リンクではなく本文をコピーしてください。" }));
+    view.appendChild(form);
+    view.appendChild(el("p", { text: "取り込んだあとは、そのまま「この会話を渡す」でCodexやClaude Codeへワンタップで渡せます。" }));
   }
 
   // ---------- chat screen ----------

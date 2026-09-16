@@ -257,14 +257,17 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "messages":
                     body = self._read_json()
                     text = (body.get("text") or "").strip()
+                    role = body.get("role") or "user"
+                    if role not in ("user", "ai", "system"):
+                        role = "user"
                     if not text:
                         self._send_json({"error": "本文を入力してください。"}, 400)
                         return
-                    conv["messages"].append({"role": "user", "text": text, "at": _now()})
+                    conv["messages"].append({"role": role, "text": text, "at": _now()})
                     conv["status"] = "active"
                     conv["updated_at"] = _now()
                     save_store(store)
-                    if conv["partner"].startswith("local_llm_"):
+                    if role == "user" and conv["partner"].startswith("local_llm_"):
                         target_key = conv["partner"][len("local_llm_"):]
                         target = store["local_llm_targets"].get(target_key)
                         if target:
