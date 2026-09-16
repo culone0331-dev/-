@@ -20,11 +20,12 @@
     { key: "other", label: "未定（あとで決める）" },
   ];
 
+  // コーディングが絡む作業は直接Codex/Claude Codeへ話しかければよく、
+  // チャット専用のClaudeへ渡す意味がないため、渡す先には含めない。
   var HANDOFF_TARGETS = [
     { key: "codex", label: "Codex" },
     { key: "claude_code", label: "Claude Code" },
     { key: "chatgpt", label: "ChatGPT" },
-    { key: "claude", label: "Claude" },
   ];
 
   function partnerLabel(key) {
@@ -374,14 +375,13 @@
 
     var dest = state.destinations;
     var chatgptInput = el("input", { type: "url", value: dest.chatgpt || "", placeholder: "https://chatgpt.com/" });
-    var claudeInput = el("input", { type: "url", value: dest.claude || "", placeholder: "https://claude.ai/" });
     var claudeCodeInput = el("input", { type: "url", value: dest.claude_code || "", placeholder: "https://claude.ai/code" });
     var codexInput = el("input", { type: "url", value: dest.codex || "", placeholder: "普段Codexを開いているURL" });
 
     var form = el("form", { class: "stack", onsubmit: function (e) {
       e.preventDefault();
       api("/api/destinations", { method: "POST", body: {
-        chatgpt: chatgptInput.value, claude: claudeInput.value,
+        chatgpt: chatgptInput.value,
         claude_code: claudeCodeInput.value, codex: codexInput.value,
       }}).then(function (data) {
         state.destinations = data.destinations;
@@ -389,7 +389,6 @@
       });
     }}, [
       el("div", {}, [el("label", { text: "ChatGPT" }), chatgptInput]),
-      el("div", {}, [el("label", { text: "Claude" }), claudeInput]),
       el("div", {}, [el("label", { text: "Claude Code" }), claudeCodeInput]),
       el("div", {}, [el("label", { text: "Codex" }), codexInput]),
       el("button", { class: "btn primary block", type: "submit", text: "保存する" }),

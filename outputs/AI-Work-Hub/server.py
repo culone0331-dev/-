@@ -23,7 +23,6 @@ DEFAULT_STORE = {
     "conversations": {},
     "destinations": {
         "chatgpt": "https://chatgpt.com/",
-        "claude": "https://claude.ai/",
         "claude_code": "https://claude.ai/code",
         "codex": "",
     },
@@ -325,7 +324,7 @@ class Handler(BaseHTTPRequestHandler):
             body = self._read_json()
             with _lock:
                 store = load_store()
-                for key in ("chatgpt", "claude", "claude_code", "codex"):
+                for key in ("chatgpt", "claude_code", "codex"):
                     if key in body:
                         store["destinations"][key] = str(body[key]).strip()
                 save_store(store)
