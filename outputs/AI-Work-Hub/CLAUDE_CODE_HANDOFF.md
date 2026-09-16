@@ -27,36 +27,62 @@ culone-server側の `data/store.json`（または相当するファイル）を�
   ログイン済みURLを登録し、コピー後にそのまま開けるようにした。
 - ローカルLLM（culone-server／サブPC AI2）だけは、コピー・貼り付けなしで直接チャットできる想定。
 
+## 設計転換（2026-09-16、Codexの仕様書を反映）
+
+Codexが `codex/codex-inbox-handoff` ブランチで作成した
+[`AI_WORK_HUB_SHARED_WORKSPACE_SPEC.md`](./AI_WORK_HUB_SHARED_WORKSPACE_SPEC.md) と
+[`CODEX_REVIEW_TO_CLAUDE.md`](./CODEX_REVIEW_TO_CLAUDE.md) を受けて、
+「会話を記録するツール」から「**案件ごとの共有作業台帳**」へ設計を転換した。
+対応内容は [`CLAUDE_REPLY_TO_CODEX.md`](./CLAUDE_REPLY_TO_CODEX.md) を参照。
+
 ## 今の実装（この outputs/AI-Work-Hub/ での再実装）
 
-- `server.py`：Python標準ライブラリのみのHTTPサーバー。会話の保存、
-  「今日はここまで」の次予定保存、「この会話を渡す」の引き継ぎ文生成、
-  ローカルLLM（Ollama互換API想定）への直接呼び出しを提供。
-- `index.html` / `app.js` / `style.css`：スマホ最優先の会話中心UI。
-- 会話の**取り込み元**は4通り（Codex／Claude Code／Claude／ChatGPT）を想定し、
-  「＋ 他のAIから取り込む」でどれで話した内容かを選んで貼り付けられる。
-  Claude Codeは Claude(claude.ai) と同じモデルにツールアクセスを足しただけなので、
-  実際にコードを触る**渡す先**はCodexとClaude Codeの2通りだけに絞っている。
-- 外部AIへの自動送信は行わない。渡す先ボタンをタップすると、
-  該当アプリを開くのと引き継ぎ文のコピーが一度に終わる（ワンタップ）。
+- `server.py`：Python標準ライブラリのみのHTTPサーバー。**案件（case）**単位で
+  原文ログ・AI回答ログ・決まったこと・未確認点・引き継ぎ履歴（版番号つき）を保存する。
+- `index.html` / `app.js` / `style.css`：案件中心のスマホ向けUI。最初に見せるのは
+  案件一覧とすぐ話せる入力欄。案件を開くと目的・現在地・最後の原文・最後のAI回答・
+  次の操作ボタンのみを表示し、詳細（決まったこと・未確認点・全履歴）は二次領域。
+- AI回答の**取り込み元**は4通り（Codex／Claude Code／Claude／ChatGPT）。原文のまま
+  出所つきで保存し、要約し直さない。
+- **渡す先**はCodex／Claude Code／ChatGPTの3通り＋ローカルLLM（直接呼び出し）。
+  Codexは固定URLがないため、URL未登録でもエラー扱いにせず、コピーのみで完了する。
+- 引き継ぎパッケージのプレビューは`readonly`の`<textarea>`で表示し、
+  クリップボードAPIが使えない環境でも長押しで手動コピーできる。
+- ローカルLLM呼び出しは、ネットワーク待機をロックの外で行う（保存用ロックは
+  値の読み書きの間だけ短時間保持する）ため、応答待ち中も他の案件の閲覧・保存が止まらない。
+- ローカルLLMの接続先URL・モデル名は空値で提供し、決め打ちしない。「設定」画面で
+  利用者・Codexが実環境の値を登録する。
+
+## データ保全・移行（このリポジトリからは実行できない範囲）
+
+culone-server上の本番AI Work Hubは`ai_work_hub.sqlite3`＋会話Markdownで稼働中。
+この実装は完全に別ファイル（`data/store.json`、JSON形式、Git管理外）であり、
+物理的に上書きは発生しない。ただし実データの移行はこのセッションからは実行できないため、
+利用者側で次の手順を行うこと（`AI_WORK_HUB_SHARED_WORKSPACE_SPEC.md` 8章に準拠）。
+
+1. `ai_work_hub.sqlite3` と会話Markdownフォルダを日付付きでバックアップする。
+2. バックアップを読み取り専用で開き、件数・原文の欠落有無を確認する。
+3. この新実装を、元のポート・フォルダとは別の場所で起動して検証する。
+4. 旧データ→新スキーマ（案件・原文ログ・AI回答ログ…）への変換スクリプトは
+   今回は用意していない。次のタスクとして着手する。
+5. 利用者が新実装で問題ないと確認してから、旧版を停止し切り替える。
 
 ## 未確認・未実装のこと
 
-1. culone-server側の実データ（既存の会話・引き継ぎコード）の移行。
-2. ローカルLLM（culone-server／AI2）の実際の接続先URL・モデル名の確認（`server.py` の
-   `DEFAULT_STORE["local_llm_targets"]` は仮のOllama想定値）。
-3. Codexの普段使う開き先URLの登録（ユーザー自身が「設定」画面で入力する想定）。
-4. 実際の作業を一件選び、記録→今日はここまで→引き継ぎ→検証、までを通しで動作確認すること。
-5. 「今日はここまで」後にローカルLLMでの検証を自動実行する導線（現状は会話を開き直す形）。
-6. Codex／ChatGPT／Claude／Claude Codeでの検証結果をAI Work Hubへ書き戻し、
-   比較・相互検証の履歴として保存する機能。
+1. culone-server側の実データの移行（上記の変換スクリプト含む）。
+2. ローカルLLM（culone-server／AI2）の実際の接続先URL・モデル名の登録
+   （`CODEX_REVIEW_TO_CLAUDE.md` によれば AI2 は `10.10.10.2:11434` の想定だが、
+   コード側には決め打ちで入れていない。設定画面から登録する）。
+3. Codex・Claude Codeでの実機動作確認（このセッションはスマホ実機を操作できない）。
+4. 引き継ぎパッケージに対する回答を貼り戻す一連の流れ（取り込み→渡す→貼り戻す）の
+   通し確認。
 
 ## 作業前に確認すること
 
 1. このファイルと `README.md` を読む。
 2. `git status` と `git log -5 --oneline -- outputs/AI-Work-Hub` を確認する。
-3. `python3 outputs/AI-Work-Hub/server.py` を起動し、受信箱→新規会話→これを残す→
-   今日はここまで→この会話を渡す、の流れをスマホ幅のブラウザで確認する。
+3. `python3 outputs/AI-Work-Hub/server.py` を起動し、受信箱で話しかける→案件が始まる→
+   決まったこと・未確認点を追加→渡す、の流れをスマホ幅のブラウザで確認する。
 4. 保存データの構造（`data/store.json`）を変える場合は、先に相談する。
 
 ## ブランチ運用

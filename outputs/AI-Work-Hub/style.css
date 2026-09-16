@@ -183,14 +183,18 @@ textarea { min-height: 88px; resize: vertical; }
 }
 
 .handoff-text {
-  white-space: pre-wrap;
+  width: 100%;
+  box-sizing: border-box;
   background: var(--panel-2);
+  border: 1px solid #2a3450;
   border-radius: 10px;
   padding: 12px;
+  color: var(--text);
+  font-family: inherit;
   font-size: .85rem;
   line-height: 1.6;
   max-height: 40vh;
-  overflow: auto;
+  resize: vertical;
 }
 
 .toast {

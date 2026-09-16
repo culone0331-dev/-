@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""AI Work Hub — 会話中心の作業記録・引き継ぎサーバー。
+"""AI Work Hub — 案件ごとの共有作業台帳サーバー。
 
 依存ライブラリなし（Python標準ライブラリのみ）で動作する。
+
+このファイルは「会話を記録するツール」ではなく、ChatGPT・Codex・Claude・
+Claude Code・ローカルLLMが同じ案件の目的・原文・判断・未確認点・回答を
+共有するための台帳を提供する（outputs/AI-Work-Hub/AI_WORK_HUB_SHARED_WORKSPACE_SPEC.md
+を参照）。
 """
 import json
 import os
@@ -19,41 +24,42 @@ DATA_DIR = BASE_DIR / "data"
 STORE_PATH = DATA_DIR / "store.json"
 PORT = int(os.environ.get("AI_WORK_HUB_PORT", "8787"))
 
+# Codexはculone-server上のデスクトップアプリで、スマホから開く固定URLがない。
+# そのためcodexだけは空URLを正常状態として扱う（設定不足エラーにしない）。
 DEFAULT_STORE = {
-    "conversations": {},
+    "cases": {},
     "destinations": {
+        "chatgpt": "https://chatgpt.com/",
         "claude_code": "https://claude.ai/code",
         "codex": "",
     },
+    # 接続先・モデル名は仮値を決め打ちしない。空のまま提供し、
+    # 実環境の値は「設定」画面から利用者・Codexが入力する。
     "local_llm_targets": {
-        "culone-server": {
-            "label": "ローカルLLM：culone-server",
-            "url": "http://localhost:11434/api/generate",
-            "model": "llama3",
-        },
-        "ai2": {
-            "label": "ローカルLLM：AI2",
-            "url": "http://ai2.local:11434/api/generate",
-            "model": "llama3",
-        },
+        "culone-server": {"label": "ローカルLLM：culone-server", "url": "", "model": ""},
+        "ai2": {"label": "ローカルLLM：AI2", "url": "", "model": ""},
     },
 }
 
-PARTNER_LABELS = {
-    "local_llm_culone-server": "ローカルLLM：culone-server",
-    "local_llm_ai2": "ローカルLLM：AI2",
-    "codex": "Codex",
-    "claude_code": "Claude Code",
+SOURCE_LABELS = {
+    "user": "利用者",
     "chatgpt": "ChatGPT",
+    "codex": "Codex",
     "claude": "Claude",
-    "other": "未定",
+    "claude_code": "Claude Code",
 }
+
+HANDOFF_TARGETS = ("codex", "claude_code", "chatgpt")
 
 _lock = threading.Lock()
 
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _short_id():
+    return uuid.uuid4().hex[:8]
 
 
 def load_store():
@@ -74,66 +80,118 @@ def save_store(store):
     tmp_path.replace(STORE_PATH)
 
 
-def conversation_summary(conv):
+def source_label(key, store):
+    if key.startswith("local_llm_"):
+        target_key = key[len("local_llm_"):]
+        target = store.get("local_llm_targets", {}).get(target_key)
+        return target["label"] if target else key
+    return SOURCE_LABELS.get(key, key)
+
+
+def new_case(title, purpose):
+    now = _now()
     return {
-        "id": conv["id"],
-        "title": conv["title"],
-        "partner": conv["partner"],
-        "partner_label": conv.get("partner_label", conv["partner"]),
-        "status": conv["status"],
-        "created_at": conv["created_at"],
-        "updated_at": conv["updated_at"],
-        "message_count": len(conv["messages"]),
-        "pending_next": conv.get("pending_next"),
+        "id": uuid.uuid4().hex[:12],
+        "title": title,
+        "purpose": purpose,
+        "status_note": "",
+        "next_owner": None,
+        "raw_entries": [],
+        "ai_entries": [],
+        "decisions": [],
+        "open_questions": [],
+        "handoffs": [],
+        "created_at": now,
+        "updated_at": now,
     }
 
 
-def build_handoff_text(conv, target_label):
+def case_summary(case):
+    last_raw = case["raw_entries"][-1] if case["raw_entries"] else None
+    last_ai = case["ai_entries"][-1] if case["ai_entries"] else None
+    return {
+        "id": case["id"],
+        "title": case["title"],
+        "purpose": case["purpose"],
+        "status_note": case["status_note"],
+        "next_owner": case["next_owner"],
+        "updated_at": case["updated_at"],
+        "raw_count": len(case["raw_entries"]),
+        "ai_count": len(case["ai_entries"]),
+        "last_raw_text": last_raw["text"] if last_raw else None,
+        "last_ai_text": last_ai["text"] if last_ai else None,
+    }
+
+
+def build_handoff_package(case, target_label, version, store):
     lines = [
-        f"# 引き継ぎ: {conv['title']}",
+        f"# 引き継ぎ: {case['title'] or '(無題の案件)'} — v{version}",
         "",
-        "AI Work Hub からの引き継ぎです。",
-        f"- これまでの相手: {conv.get('partner_label', conv.get('partner', ''))}",
+        "AI Work Hub からの引き継ぎパッケージです。",
+        f"- 目的: {case['purpose'] or '(未設定)'}",
+        f"- 現在地: {case['status_note'] or '(未設定)'}",
         f"- 渡す先: {target_label}",
         f"- 作成日時: {_now()}",
+        f"- 版: {version}",
         "",
-        "## これまでの会話・メモ",
+        "## 利用者の原文",
     ]
-    if not conv["messages"]:
+    if not case["raw_entries"]:
         lines.append("(まだ記録がありません)")
-    for m in conv["messages"]:
-        role = {"user": "自分", "ai": "AI", "system": "システム"}.get(m["role"], m["role"])
-        lines.append(f"- [{role}] {m['text']}")
+    for e in case["raw_entries"]:
+        lines.append(f"- {e['text']}")
 
-    pending = conv.get("pending_next")
+    lines.append("")
+    lines.append("## これまでのAI回答")
+    if not case["ai_entries"]:
+        lines.append("(まだありません)")
+    for e in case["ai_entries"]:
+        lines.append(f"- [{source_label(e['source'], store)}] {e['text']}")
+
+    lines.append("")
+    lines.append("## 決まったこと")
+    if not case["decisions"]:
+        lines.append("(まだありません)")
+    for e in case["decisions"]:
+        lines.append(f"- {e['text']}")
+
+    lines.append("")
+    lines.append("## 未確認点（推測で進めないこと）")
+    open_qs = [e for e in case["open_questions"] if not e["resolved"]]
+    if not open_qs:
+        lines.append("(現時点でなし)")
+    for e in open_qs:
+        lines.append(f"- {e['text']}")
+
     lines.append("")
     lines.append("## 次にやってほしいこと")
-    if pending and pending.get("note"):
-        lines.append(pending["note"])
-    elif pending:
-        lines.append(
-            f"（{PARTNER_LABELS.get(pending.get('target'), pending.get('target'))}での検証予定として保留中）"
-        )
-    else:
-        lines.append("上記の会話・メモを踏まえて、続きを進めてください。")
+    lines.append(case["status_note"] or "上記を踏まえて、続きを進めてください。")
     lines.append("")
     lines.append("不明な点は推測せず、現状を確認してから安全に進めてください。")
     return "\n".join(lines)
 
 
-def call_local_llm(target, conv):
-    prompt_lines = [
-        f"[{m['role']}] {m['text']}" for m in conv["messages"] if m["role"] in ("user", "ai")
-    ]
-    prompt = "\n".join(prompt_lines)
+def build_local_llm_prompt(case):
+    lines = [f"目的: {case['purpose']}"] if case["purpose"] else []
+    timeline = sorted(
+        [("raw", e) for e in case["raw_entries"]] + [("ai", e) for e in case["ai_entries"]],
+        key=lambda pair: pair[1]["at"],
+    )
+    for kind, e in timeline[-20:]:
+        tag = "利用者" if kind == "raw" else e["source"]
+        lines.append(f"[{tag}] {e['text']}")
+    return "\n".join(lines)
+
+
+def call_local_llm(target, prompt):
     payload = json.dumps(
-        {"model": target.get("model", "llama3"), "prompt": prompt, "stream": False}
+        {"model": target.get("model") or "", "prompt": prompt, "stream": False}
     ).encode("utf-8")
     req = urllib.request.Request(
         target["url"], data=payload, headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             reply = (data.get("response") or "").strip()
             return (reply or None), None
@@ -142,7 +200,7 @@ def call_local_llm(target, conv):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AIWorkHub/0.1"
+    server_version = "AIWorkHub/0.2"
 
     def _send_json(self, payload, status=200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -177,6 +235,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    # ---------- GET ----------
+
     def do_GET(self):
         path = urlparse(self.path).path
         if path in ("/", "/index.html"):
@@ -185,153 +245,287 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(BASE_DIR / "app.js", "text/javascript; charset=utf-8")
         elif path == "/style.css":
             self._send_file(BASE_DIR / "style.css", "text/css; charset=utf-8")
-        elif path == "/api/conversations":
+        elif path == "/api/cases":
             with _lock:
                 store = load_store()
-            convs = sorted(
-                store["conversations"].values(), key=lambda c: c["updated_at"], reverse=True
-            )
-            self._send_json({"conversations": [conversation_summary(c) for c in convs]})
-        elif path.startswith("/api/conversations/"):
-            conv_id = path.split("/")[3]
+            cases = sorted(store["cases"].values(), key=lambda c: c["updated_at"], reverse=True)
+            self._send_json({"cases": [case_summary(c) for c in cases]})
+        elif path.startswith("/api/cases/"):
+            case_id = path.split("/")[3]
             with _lock:
                 store = load_store()
-            conv = store["conversations"].get(conv_id)
-            if not conv:
-                self._send_json({"error": "会話が見つかりません。"}, 404)
+            case = store["cases"].get(case_id)
+            if not case:
+                self._send_json({"error": "案件が見つかりません。"}, 404)
                 return
-            self._send_json({"conversation": conv})
+            self._send_json({"case": case})
         elif path == "/api/destinations":
             with _lock:
                 store = load_store()
             self._send_json(
-                {
-                    "destinations": store["destinations"],
-                    "local_llm_targets": store["local_llm_targets"],
-                }
+                {"destinations": store["destinations"], "local_llm_targets": store["local_llm_targets"]}
             )
         else:
             self._send_json({"error": "not found"}, 404)
+
+    # ---------- POST ----------
 
     def do_POST(self):
         path = urlparse(self.path).path
         segments = [s for s in path.split("/") if s]
 
-        if path == "/api/conversations":
-            body = self._read_json()
-            title = (body.get("title") or "").strip() or f"無題の会話 {_now()}"
-            partner = (body.get("partner") or "other").strip()
-            with _lock:
-                store = load_store()
-                conv_id = uuid.uuid4().hex[:12]
-                now = _now()
-                store["conversations"][conv_id] = {
-                    "id": conv_id,
-                    "title": title,
-                    "partner": partner,
-                    "partner_label": PARTNER_LABELS.get(partner, partner),
-                    "status": "active",
-                    "created_at": now,
-                    "updated_at": now,
-                    "messages": [],
-                    "pending_next": None,
-                    "last_handoff": None,
-                }
-                save_store(store)
-                conv = store["conversations"][conv_id]
-            self._send_json({"conversation": conv}, 201)
+        if path == "/api/cases":
+            self._create_case()
             return
 
-        if len(segments) >= 3 and segments[0] == "api" and segments[1] == "conversations":
-            conv_id = segments[2]
-            action = segments[3] if len(segments) > 3 else None
-            with _lock:
-                store = load_store()
-                conv = store["conversations"].get(conv_id)
-                if not conv:
-                    self._send_json({"error": "会話が見つかりません。"}, 404)
-                    return
-
-                if action == "messages":
-                    body = self._read_json()
-                    text = (body.get("text") or "").strip()
-                    role = body.get("role") or "user"
-                    if role not in ("user", "ai", "system"):
-                        role = "user"
-                    if not text:
-                        self._send_json({"error": "本文を入力してください。"}, 400)
-                        return
-                    conv["messages"].append({"role": role, "text": text, "at": _now()})
-                    conv["status"] = "active"
-                    conv["updated_at"] = _now()
-                    save_store(store)
-                    if role == "user" and conv["partner"].startswith("local_llm_"):
-                        target_key = conv["partner"][len("local_llm_"):]
-                        target = store["local_llm_targets"].get(target_key)
-                        if target:
-                            reply, error = call_local_llm(target, conv)
-                            if reply:
-                                conv["messages"].append({"role": "ai", "text": reply, "at": _now()})
-                            elif error:
-                                conv["messages"].append(
-                                    {
-                                        "role": "system",
-                                        "text": f"(ローカルLLMに接続できませんでした: {error})",
-                                        "at": _now(),
-                                    }
-                                )
-                            conv["updated_at"] = _now()
-                            save_store(store)
-                    self._send_json({"conversation": conv})
-                    return
-
-                if action == "finish":
-                    body = self._read_json()
-                    target = body.get("target")
-                    note = (body.get("note") or "").strip()
-                    conv["pending_next"] = (
-                        {"target": target, "note": note, "at": _now()} if target else None
-                    )
-                    conv["status"] = "paused"
-                    conv["updated_at"] = _now()
-                    save_store(store)
-                    self._send_json({"conversation": conv})
-                    return
-
-                if action == "handoff":
-                    body = self._read_json()
-                    target = body.get("target", "")
-                    target_label = PARTNER_LABELS.get(target, target)
-                    text = build_handoff_text(conv, target_label)
-                    conv["last_handoff"] = {"target": target, "text": text, "at": _now()}
-                    conv["updated_at"] = _now()
-                    save_store(store)
-                    self._send_json({"text": text})
-                    return
-
-                if action == "resume":
-                    conv["status"] = "active"
-                    conv["updated_at"] = _now()
-                    save_store(store)
-                    self._send_json({"conversation": conv})
-                    return
-
-            self._send_json({"error": "not found"}, 404)
+        if len(segments) >= 4 and segments[0] == "api" and segments[1] == "cases":
+            self._case_action(segments)
             return
 
         if path == "/api/destinations":
-            body = self._read_json()
-            with _lock:
-                store = load_store()
-                for key in ("claude_code", "codex"):
-                    if key in body:
-                        store["destinations"][key] = str(body[key]).strip()
-                save_store(store)
-                destinations = store["destinations"]
-            self._send_json({"destinations": destinations})
+            self._update_destinations()
+            return
+
+        if path == "/api/local-llm-targets":
+            self._update_local_llm_targets()
             return
 
         self._send_json({"error": "not found"}, 404)
+
+    def _create_case(self):
+        body = self._read_json()
+        title = (body.get("title") or "").strip()
+        purpose = (body.get("purpose") or "").strip()
+        raw_text = (body.get("raw_text") or "").strip()
+        ai_source = (body.get("ai_source") or "").strip()
+        ai_text = (body.get("ai_text") or "").strip()
+        with _lock:
+            store = load_store()
+            case = new_case(title, purpose)
+            if raw_text:
+                case["raw_entries"].append({"id": _short_id(), "text": raw_text, "at": _now()})
+            if ai_source and ai_text:
+                case["ai_entries"].append(
+                    {"id": _short_id(), "source": ai_source, "text": ai_text, "at": _now()}
+                )
+            store["cases"][case["id"]] = case
+            save_store(store)
+        self._send_json({"case": case}, 201)
+
+    def _case_action(self, segments):
+        case_id = segments[2]
+        action = segments[3]
+
+        if action == "raw":
+            body = self._read_json()
+            text = (body.get("text") or "").strip()
+            if not text:
+                self._send_json({"error": "本文を入力してください。"}, 400)
+                return
+            with _lock:
+                store = load_store()
+                case = store["cases"].get(case_id)
+                if not case:
+                    self._send_json({"error": "案件が見つかりません。"}, 404)
+                    return
+                case["raw_entries"].append({"id": _short_id(), "text": text, "at": _now()})
+                case["updated_at"] = _now()
+                save_store(store)
+            self._send_json({"case": case})
+            return
+
+        if action == "ai-response":
+            body = self._read_json()
+            source = (body.get("source") or "").strip()
+            text = (body.get("text") or "").strip()
+            if not text or not source:
+                self._send_json({"error": "出所と本文を入力してください。"}, 400)
+                return
+            with _lock:
+                store = load_store()
+                case = store["cases"].get(case_id)
+                if not case:
+                    self._send_json({"error": "案件が見つかりません。"}, 404)
+                    return
+                case["ai_entries"].append(
+                    {"id": _short_id(), "source": source, "text": text, "at": _now()}
+                )
+                case["updated_at"] = _now()
+                save_store(store)
+            self._send_json({"case": case})
+            return
+
+        if action == "decision":
+            body = self._read_json()
+            text = (body.get("text") or "").strip()
+            if not text:
+                self._send_json({"error": "本文を入力してください。"}, 400)
+                return
+            with _lock:
+                store = load_store()
+                case = store["cases"].get(case_id)
+                if not case:
+                    self._send_json({"error": "案件が見つかりません。"}, 404)
+                    return
+                case["decisions"].append({"id": _short_id(), "text": text, "at": _now()})
+                case["updated_at"] = _now()
+                save_store(store)
+            self._send_json({"case": case})
+            return
+
+        if action == "open-question":
+            if len(segments) >= 6 and segments[5] == "resolve":
+                question_id = segments[4]
+                with _lock:
+                    store = load_store()
+                    case = store["cases"].get(case_id)
+                    if not case:
+                        self._send_json({"error": "案件が見つかりません。"}, 404)
+                        return
+                    for q in case["open_questions"]:
+                        if q["id"] == question_id:
+                            q["resolved"] = True
+                    case["updated_at"] = _now()
+                    save_store(store)
+                self._send_json({"case": case})
+                return
+            body = self._read_json()
+            text = (body.get("text") or "").strip()
+            if not text:
+                self._send_json({"error": "本文を入力してください。"}, 400)
+                return
+            with _lock:
+                store = load_store()
+                case = store["cases"].get(case_id)
+                if not case:
+                    self._send_json({"error": "案件が見つかりません。"}, 404)
+                    return
+                case["open_questions"].append(
+                    {"id": _short_id(), "text": text, "resolved": False, "at": _now()}
+                )
+                case["updated_at"] = _now()
+                save_store(store)
+            self._send_json({"case": case})
+            return
+
+        if action == "status":
+            body = self._read_json()
+            with _lock:
+                store = load_store()
+                case = store["cases"].get(case_id)
+                if not case:
+                    self._send_json({"error": "案件が見つかりません。"}, 404)
+                    return
+                if "status_note" in body:
+                    case["status_note"] = str(body["status_note"]).strip()
+                if "next_owner" in body:
+                    case["next_owner"] = body["next_owner"] or None
+                if "title" in body:
+                    case["title"] = str(body["title"]).strip()
+                if "purpose" in body:
+                    case["purpose"] = str(body["purpose"]).strip()
+                case["updated_at"] = _now()
+                save_store(store)
+            self._send_json({"case": case})
+            return
+
+        if action == "handoff":
+            body = self._read_json()
+            target = body.get("target", "")
+            if target not in HANDOFF_TARGETS:
+                self._send_json({"error": "渡す先が正しくありません。"}, 400)
+                return
+            with _lock:
+                store = load_store()
+                case = store["cases"].get(case_id)
+                if not case:
+                    self._send_json({"error": "案件が見つかりません。"}, 404)
+                    return
+                version = len(case["handoffs"]) + 1
+                target_label = source_label(target, store)
+                text = build_handoff_package(case, target_label, version, store)
+                case["handoffs"].append(
+                    {"version": version, "target": target, "text": text, "at": _now()}
+                )
+                case["next_owner"] = target
+                case["updated_at"] = _now()
+                save_store(store)
+            self._send_json({"text": text, "version": version})
+            return
+
+        if action == "local-llm":
+            self._call_local_llm(case_id)
+            return
+
+        self._send_json({"error": "not found"}, 404)
+
+    def _call_local_llm(self, case_id):
+        body = self._read_json()
+        target_key = (body.get("target_key") or "").strip()
+
+        # ロック内で必要な情報だけ取り出し、ネットワーク待機はロック外で行う。
+        # こうしないと、応答待ちの間ほかの案件の閲覧・保存が止まってしまう。
+        with _lock:
+            store = load_store()
+            case = store["cases"].get(case_id)
+            if not case:
+                self._send_json({"error": "案件が見つかりません。"}, 404)
+                return
+            target = store["local_llm_targets"].get(target_key)
+            if not target or not target.get("url"):
+                self._send_json(
+                    {"error": "このローカルLLMの接続先が未設定です。「設定」で登録してください。"}, 400
+                )
+                return
+            prompt = build_local_llm_prompt(case)
+
+        reply, error = call_local_llm(target, prompt)
+
+        with _lock:
+            store = load_store()
+            case = store["cases"].get(case_id)
+            if not case:
+                self._send_json({"error": "案件が見つかりません。"}, 404)
+                return
+            source_key = f"local_llm_{target_key}"
+            if reply:
+                case["ai_entries"].append(
+                    {"id": _short_id(), "source": source_key, "text": reply, "at": _now()}
+                )
+            else:
+                self._send_json({"error": f"ローカルLLMに接続できませんでした: {error}"}, 502)
+                return
+            case["updated_at"] = _now()
+            save_store(store)
+        self._send_json({"case": case})
+
+    def _update_destinations(self):
+        body = self._read_json()
+        with _lock:
+            store = load_store()
+            for key in ("chatgpt", "claude_code", "codex"):
+                if key in body:
+                    store["destinations"][key] = str(body[key]).strip()
+            save_store(store)
+            destinations = store["destinations"]
+        self._send_json({"destinations": destinations})
+
+    def _update_local_llm_targets(self):
+        body = self._read_json()
+        with _lock:
+            store = load_store()
+            for key, values in body.items():
+                if key not in store["local_llm_targets"]:
+                    continue
+                if not isinstance(values, dict):
+                    continue
+                if "url" in values:
+                    store["local_llm_targets"][key]["url"] = str(values["url"]).strip()
+                if "model" in values:
+                    store["local_llm_targets"][key]["model"] = str(values["model"]).strip()
+            save_store(store)
+            targets = store["local_llm_targets"]
+        self._send_json({"local_llm_targets": targets})
 
 
 def main():
