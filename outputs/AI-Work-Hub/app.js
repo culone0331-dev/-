@@ -20,12 +20,18 @@
     { key: "other", label: "未定（あとで決める）" },
   ];
 
-  // コーディングが絡む作業は直接Codex/Claude Codeへ話しかければよく、
-  // チャット専用のClaudeへ渡す意味がないため、渡す先には含めない。
+  // 会話がどこで始まったか（4通り）と、そこから実際にコードを
+  // 触るために渡す先（2通り）は別物。渡す先はCodex/Claude Codeのみ。
+  var IMPORT_SOURCES = [
+    { key: "codex", label: "Codex" },
+    { key: "claude_code", label: "Claude Code" },
+    { key: "claude", label: "Claude" },
+    { key: "chatgpt", label: "ChatGPT" },
+  ];
+
   var HANDOFF_TARGETS = [
     { key: "codex", label: "Codex" },
     { key: "claude_code", label: "Claude Code" },
-    { key: "chatgpt", label: "ChatGPT" },
   ];
 
   function partnerLabel(key) {
@@ -93,9 +99,9 @@
     renderNew();
   }
 
-  function goImportChatGPT() {
-    state.screen = "import-chatgpt";
-    renderImportChatGPT();
+  function goImport() {
+    state.screen = "import";
+    renderImport();
   }
 
   function goChat(id) {
@@ -127,7 +133,7 @@
     clear();
     view.appendChild(el("div", { class: "btn-row" }, [
       el("button", { class: "btn primary", text: "＋ 新しい会話をはじめる", onclick: goNew }),
-      el("button", { class: "btn secondary", text: "＋ ChatGPTから取り込む", onclick: goImportChatGPT }),
+      el("button", { class: "btn secondary", text: "＋ 他のAIから取り込む", onclick: goImport }),
     ]));
 
     if (state.conversations.length === 0) {
@@ -197,12 +203,25 @@
     view.appendChild(form);
   }
 
-  // ---------- import from ChatGPT screen ----------
+  // ---------- import from another AI screen ----------
 
-  function renderImportChatGPT() {
+  function renderImport() {
     clear();
+    var selected = { source: IMPORT_SOURCES[0].key };
+
     var titleInput = el("input", { type: "text", placeholder: "例：夕方の買い出しメモ" });
-    var pasteArea = el("textarea", { placeholder: "ChatGPTでまとめてもらった内容をここに貼り付け", rows: "10" });
+    var sourceGrid = el("div", { class: "partner-grid" });
+    IMPORT_SOURCES.forEach(function (s) {
+      var b = el("button", { type: "button", text: s.label, onclick: function () {
+        selected.source = s.key;
+        Array.prototype.forEach.call(sourceGrid.children, function (child) { child.classList.remove("selected"); });
+        b.classList.add("selected");
+      }});
+      if (s.key === selected.source) b.classList.add("selected");
+      sourceGrid.appendChild(b);
+    });
+
+    var pasteArea = el("textarea", { placeholder: "話した内容や、まとめてもらった要約をここに貼り付け", rows: "10" });
     var submitBtn = el("button", { class: "btn primary block", type: "submit", text: "取り込んで続ける" });
 
     var form = el("form", { class: "stack", onsubmit: function (e) {
@@ -210,7 +229,7 @@
       var text = pasteArea.value.trim();
       if (!text) { toast("貼り付ける内容を入力してください。"); return; }
       submitBtn.disabled = true;
-      api("/api/conversations", { method: "POST", body: { title: titleInput.value, partner: "chatgpt" } })
+      api("/api/conversations", { method: "POST", body: { title: titleInput.value, partner: selected.source } })
         .then(function (data) {
           var convId = data.conversation.id;
           return api("/api/conversations/" + convId + "/messages", { method: "POST", body: { text: text, role: "ai" } });
@@ -223,15 +242,16 @@
         .finally(function () { submitBtn.disabled = false; });
     }}, [
       el("div", {}, [el("label", { text: "会話名（あとから変えなくてOK）" }), titleInput]),
-      el("div", {}, [el("label", { text: "ChatGPTの内容" }), pasteArea]),
+      el("div", {}, [el("label", { text: "どこで話した内容か" }), sourceGrid]),
+      el("div", {}, [el("label", { text: "内容" }), pasteArea]),
       submitBtn,
       el("button", { class: "btn ghost block", type: "button", text: "← 受信箱に戻る", onclick: goList }),
     ]);
 
-    view.appendChild(el("h1", { text: "ChatGPTから取り込む" }));
-    view.appendChild(el("p", { text: "ChatGPTで話した内容を「これを引き継ぐ用にまとめて」と頼み、出てきた文章をコピーしてここに貼り付けてください。共有リンクではなく本文をコピーしてください。" }));
+    view.appendChild(el("h1", { text: "他のAIから取り込む" }));
+    view.appendChild(el("p", { text: "「これを引き継ぐ用にまとめて」と頼んで出てきた文章をコピーし、ここに貼り付けてください。共有リンクではなく本文をコピーしてください。" }));
     view.appendChild(form);
-    view.appendChild(el("p", { text: "取り込んだあとは、そのまま「この会話を渡す」でCodexやClaude Codeへワンタップで渡せます。" }));
+    view.appendChild(el("p", { text: "取り込んだあとは、そのまま「この会話を渡す」でCodexかClaude Codeへワンタップで渡せます。" }));
   }
 
   // ---------- chat screen ----------
@@ -374,29 +394,23 @@
     view.appendChild(el("p", { text: "「この会話を渡す」で送り先を開くときに使うURLです。ログイン済みの入口を登録してください。" }));
 
     var dest = state.destinations;
-    var chatgptInput = el("input", { type: "url", value: dest.chatgpt || "", placeholder: "https://chatgpt.com/" });
     var claudeCodeInput = el("input", { type: "url", value: dest.claude_code || "", placeholder: "https://claude.ai/code" });
     var codexInput = el("input", { type: "url", value: dest.codex || "", placeholder: "普段Codexを開いているURL" });
 
     var form = el("form", { class: "stack", onsubmit: function (e) {
       e.preventDefault();
       api("/api/destinations", { method: "POST", body: {
-        chatgpt: chatgptInput.value,
         claude_code: claudeCodeInput.value, codex: codexInput.value,
       }}).then(function (data) {
         state.destinations = data.destinations;
         toast("保存しました。");
       });
     }}, [
-      el("div", {}, [el("label", { text: "ChatGPT" }), chatgptInput]),
       el("div", {}, [el("label", { text: "Claude Code" }), claudeCodeInput]),
       el("div", {}, [el("label", { text: "Codex" }), codexInput]),
       el("button", { class: "btn primary block", type: "submit", text: "保存する" }),
     ]);
     view.appendChild(form);
-
-    view.appendChild(el("div", { class: "notice", text:
-      "ChatGPTの「共有リンク」はここに登録しないでください。共有リンクは会話の公開用スナップショットで、リンクを知っている人が内容を見られる可能性があります。" }));
 
     view.appendChild(el("h2", { text: "ローカルLLM" }));
     view.appendChild(el("p", { text: "URL不要で、AI Work Hubから直接呼び出せます（Ollama互換APIを想定）。接続先は server.py の local_llm_targets、または data/store.json で設定してください。" }));
