@@ -36,5 +36,9 @@ yarn-error.log*
 
 /dist/
 /.wrangler/
-/outputs/
+/outputs/*
+!/outputs/AI-Work-Hub
+/outputs/AI-Work-Hub/data/store.json
+/outputs/AI-Work-Hub/data/*.tmp
+/outputs/AI-Work-Hub/__pycache__/
 /work/
