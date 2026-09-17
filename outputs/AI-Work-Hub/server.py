@@ -239,12 +239,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path in ("/", "/index.html"):
+        if path in ("/", "/index.html", "/share-target"):
+            # /share-target: Androidの共有メニュー（Web Share Target）から遷移してくる先。
+            # 送られた内容はクエリ文字列(?title=&text=&url=)に載っているので、
+            # 同じSPAを返し、起動時にapp.js側でクエリを読んで取り込み画面へ誘導する。
             self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
         elif path == "/app.js":
             self._send_file(BASE_DIR / "app.js", "text/javascript; charset=utf-8")
         elif path == "/style.css":
             self._send_file(BASE_DIR / "style.css", "text/css; charset=utf-8")
+        elif path == "/manifest.json":
+            self._send_file(BASE_DIR / "manifest.json", "application/manifest+json; charset=utf-8")
+        elif path == "/icons/icon-192.png":
+            self._send_file(BASE_DIR / "icons" / "icon-192.png", "image/png")
+        elif path == "/icons/icon-512.png":
+            self._send_file(BASE_DIR / "icons" / "icon-512.png", "image/png")
         elif path == "/api/cases":
             with _lock:
                 store = load_store()

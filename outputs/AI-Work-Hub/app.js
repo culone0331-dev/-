@@ -212,11 +212,12 @@
 
   // ---------- import from another AI screen ----------
 
-  function renderImport() {
+  function renderImport(prefill) {
     clear();
-    var selected = { source: AI_SOURCES[0].key };
+    prefill = prefill || {};
+    var selected = { source: prefill.source || AI_SOURCES[0].key };
 
-    var titleInput = el("input", { type: "text", placeholder: "例：買い出しアプリのバグ修正" });
+    var titleInput = el("input", { type: "text", placeholder: "例：買い出しアプリのバグ修正", value: prefill.title || "" });
     var sourceGrid = el("div", { class: "partner-grid" });
     AI_SOURCES.forEach(function (s) {
       var b = el("button", { type: "button", text: s.label, onclick: function () {
@@ -228,7 +229,7 @@
       sourceGrid.appendChild(b);
     });
 
-    var pasteArea = el("textarea", { placeholder: "話した内容や、まとめてもらった回答をここに貼り付け（原文のまま）", rows: "10" });
+    var pasteArea = el("textarea", { placeholder: "話した内容や、まとめてもらった回答をここに貼り付け（原文のまま）", rows: "10", text: prefill.text || "" });
     var submitBtn = el("button", { class: "btn primary block", type: "submit", text: "取り込んで新しい案件にする" });
 
     var form = el("form", { class: "stack", onsubmit: function (e) {
@@ -514,5 +515,20 @@
 
   // ---------- boot ----------
 
-  goList();
+  function bootFromShareTarget() {
+    var params = new URLSearchParams(location.search);
+    var sharedText = (params.get("text") || params.get("url") || "").trim();
+    var sharedTitle = (params.get("title") || "").trim();
+    if (!sharedText) return false;
+    // 一度使ったら消す（再読み込みで再取り込みされないように）
+    history.replaceState(null, "", location.pathname);
+    state.screen = "import";
+    renderImport({ source: "chatgpt", title: sharedTitle, text: sharedText });
+    toast("共有された内容を取り込み欄に入れました。送り先を確認して保存してください。");
+    return true;
+  }
+
+  if (!bootFromShareTarget()) {
+    goList();
+  }
 })();
