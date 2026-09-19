@@ -217,7 +217,14 @@ def build_local_llm_prompt(case):
 
 def call_local_llm(target, prompt):
     payload = json.dumps(
-        {"model": target.get("model") or "", "prompt": prompt, "stream": False}
+        {
+            "model": target.get("model") or "",
+            "prompt": prompt,
+            "stream": False,
+            # 台帳の確認・レビュー用途では長大な会話枠は不要。既定の大きすぎる
+            # contextを避け、AI2/culone-serverの統合メモリを他の仕事に残す。
+            "options": {"num_ctx": 4096, "num_predict": 384, "temperature": 0.2},
+        }
     ).encode("utf-8")
     req = urllib.request.Request(
         target["url"], data=payload, headers={"Content-Type": "application/json"}
