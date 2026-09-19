@@ -314,6 +314,26 @@
       actionGrid.appendChild(btn);
     });
 
+    var jobs = c.jobs || [];
+    if (jobs.length) {
+      var pending = jobs.some(function (job) { return job.status === "queued" || job.status === "running"; });
+      var jobRows = jobs.slice(0, 4).map(function (job) {
+        var label = job.status === "queued" ? "待機中" : job.status === "running" ? "確認中" : job.status === "completed" ? "完了" : "失敗";
+        var detail = job.error ? " — " + job.error : "";
+        return el("div", { class: "job-row" }, [
+          el("span", { text: job.target_label }),
+          el("span", { class: "tag job-" + job.status, text: label }),
+          el("span", { class: "meta", text: detail }),
+        ]);
+      });
+      view.appendChild(el("div", { class: "card stack" }, [el("label", { text: "ローカルLLMの依頼状況" })].concat(jobRows)));
+      if (pending) {
+        setTimeout(function () {
+          if (state.current && state.current.id === c.id) refreshCurrent().then(renderCase).catch(function () {});
+        }, 3000);
+      }
+    }
+
     var handoffPreview = copyableText(c.handoffs.length ? c.handoffs[c.handoffs.length - 1].text : "「渡す」を押すと、ここに引き継ぎパッケージが表示されます。長押しで手動コピーもできます。");
     view.appendChild(el("div", {}, [el("label", { text: "直近の引き継ぎパッケージ（長押しで手動コピー可）" }), handoffPreview]));
 
@@ -346,7 +366,7 @@
     function callLocalLlm(key, btn) {
       btn.disabled = true;
       api("/api/cases/" + c.id + "/local-llm", { method: "POST", body: { target_key: key } })
-        .then(function () { return refreshCurrent(); })
+        .then(function () { toast("ローカルLLMへ依頼を追加しました。画面を閉じても処理は続きます。"); return refreshCurrent(); })
         .then(renderCase)
         .catch(function (err) { toast(err.message); })
         .finally(function () { btn.disabled = false; });

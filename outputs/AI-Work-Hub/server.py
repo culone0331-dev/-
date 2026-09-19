@@ -28,6 +28,9 @@ PORT = int(os.environ.get("AI_WORK_HUB_PORT", "8787"))
 # そのためcodexだけは空URLを正常状態として扱う（設定不足エラーにしない）。
 DEFAULT_STORE = {
     "cases": {},
+    # ローカルLLMへの依頼は案件と分けて保持する。これにより、応答待ちの間も
+    # 画面操作や別のAI2/culone-serverへの依頼を止めない。
+    "jobs": {},
     "destinations": {
         "chatgpt": "https://chatgpt.com/",
         "claude_code": "https://claude.ai/code",
@@ -52,6 +55,8 @@ SOURCE_LABELS = {
 HANDOFF_TARGETS = ("codex", "claude_code", "chatgpt")
 
 _lock = threading.Lock()
+_target_locks = {}
+_target_locks_guard = threading.Lock()
 
 
 def _now():
@@ -70,6 +75,28 @@ def load_store():
     for key, value in DEFAULT_STORE.items():
         store.setdefault(key, value)
     return store
+
+
+def target_lock(target_key):
+    """同じ推論機には一件ずつ、別の推論機どうしは並列で実行する。"""
+    with _target_locks_guard:
+        if target_key not in _target_locks:
+            _target_locks[target_key] = threading.Lock()
+        return _target_locks[target_key]
+
+
+def job_summary(job):
+    return {
+        "id": job["id"], "case_id": job["case_id"], "target_key": job["target_key"],
+        "target_label": job["target_label"], "status": job["status"],
+        "created_at": job["created_at"], "started_at": job.get("started_at"),
+        "completed_at": job.get("completed_at"), "error": job.get("error"),
+    }
+
+
+def jobs_for_case(store, case_id):
+    jobs = [job_summary(job) for job in store.get("jobs", {}).values() if job["case_id"] == case_id]
+    return sorted(jobs, key=lambda job: job["created_at"], reverse=True)
 
 
 def save_store(store):
@@ -172,7 +199,12 @@ def build_handoff_package(case, target_label, version, store):
 
 
 def build_local_llm_prompt(case):
-    lines = [f"目的: {case['purpose']}"] if case["purpose"] else []
+    lines = [
+        "あなたは案件の独立したローカル検証担当です。日本語で、"
+        "(1)結論 (2)見落とし・未確認点 (3)安全な次の一手、の順に短く回答してください。"
+    ]
+    if case["purpose"]:
+        lines.append(f"目的: {case['purpose']}")
     timeline = sorted(
         [("raw", e) for e in case["raw_entries"]] + [("ai", e) for e in case["ai_entries"]],
         key=lambda pair: pair[1]["at"],
@@ -191,12 +223,64 @@ def call_local_llm(target, prompt):
         target["url"], data=payload, headers={"Content-Type": "application/json"}
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        # 70B級の初回読込でも、画面や他案件を止めずに待てるようにする。
+        with urllib.request.urlopen(req, timeout=900) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             reply = (data.get("response") or "").strip()
             return (reply or None), None
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
         return None, str(exc)
+
+
+def run_local_llm_job(job_id):
+    """一件のローカルLLM依頼をバックグラウンドで実行する。"""
+    with _lock:
+        store = load_store()
+        job = store.get("jobs", {}).get(job_id)
+        if not job:
+            return
+        target_key = job["target_key"]
+
+    # 同じ推論機でのメモリ競合は避け、AI2とculone-server間は同時に動かす。
+    with target_lock(target_key):
+        with _lock:
+            store = load_store()
+            job = store.get("jobs", {}).get(job_id)
+            if not job:
+                return
+            case = store["cases"].get(job["case_id"])
+            target = store["local_llm_targets"].get(target_key)
+            if not case or not target or not target.get("url") or not target.get("model"):
+                job["status"] = "failed"
+                job["error"] = "案件またはローカルLLM設定が見つかりません。"
+                job["completed_at"] = _now()
+                save_store(store)
+                return
+            job["status"] = "running"
+            job["started_at"] = _now()
+            save_store(store)
+            prompt = build_local_llm_prompt(case)
+
+        reply, error = call_local_llm(target, prompt)
+
+        with _lock:
+            store = load_store()
+            job = store.get("jobs", {}).get(job_id)
+            case = store["cases"].get(job["case_id"]) if job else None
+            if not job:
+                return
+            job["completed_at"] = _now()
+            if reply and case:
+                case["ai_entries"].append(
+                    {"id": _short_id(), "source": f"local_llm_{target_key}", "text": reply, "at": _now()}
+                )
+                case["updated_at"] = _now()
+                job["status"] = "completed"
+                job["error"] = None
+            else:
+                job["status"] = "failed"
+                job["error"] = error or "ローカルLLMから応答がありません。"
+            save_store(store)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -267,7 +351,17 @@ class Handler(BaseHTTPRequestHandler):
             if not case:
                 self._send_json({"error": "案件が見つかりません。"}, 404)
                 return
-            self._send_json({"case": case})
+            payload = dict(case)
+            payload["jobs"] = jobs_for_case(store, case_id)
+            self._send_json({"case": payload})
+        elif path == "/api/jobs":
+            with _lock:
+                store = load_store()
+            jobs = sorted(
+                (job_summary(job) for job in store.get("jobs", {}).values()),
+                key=lambda job: job["created_at"], reverse=True,
+            )
+            self._send_json({"jobs": jobs})
         elif path == "/api/destinations":
             with _lock:
                 store = load_store()
@@ -463,17 +557,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if action == "local-llm":
-            self._call_local_llm(case_id)
+            self._queue_local_llm(case_id)
             return
 
         self._send_json({"error": "not found"}, 404)
 
-    def _call_local_llm(self, case_id):
+    def _queue_local_llm(self, case_id):
         body = self._read_json()
         target_key = (body.get("target_key") or "").strip()
 
-        # ロック内で必要な情報だけ取り出し、ネットワーク待機はロック外で行う。
-        # こうしないと、応答待ちの間ほかの案件の閲覧・保存が止まってしまう。
         with _lock:
             store = load_store()
             case = store["cases"].get(case_id)
@@ -481,32 +573,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "案件が見つかりません。"}, 404)
                 return
             target = store["local_llm_targets"].get(target_key)
-            if not target or not target.get("url"):
+            if not target or not target.get("url") or not target.get("model"):
                 self._send_json(
-                    {"error": "このローカルLLMの接続先が未設定です。「設定」で登録してください。"}, 400
+                    {"error": "このローカルLLMの接続先またはモデル名が未設定です。「設定」で登録してください。"}, 400
                 )
                 return
-            prompt = build_local_llm_prompt(case)
-
-        reply, error = call_local_llm(target, prompt)
-
-        with _lock:
-            store = load_store()
-            case = store["cases"].get(case_id)
-            if not case:
-                self._send_json({"error": "案件が見つかりません。"}, 404)
-                return
-            source_key = f"local_llm_{target_key}"
-            if reply:
-                case["ai_entries"].append(
-                    {"id": _short_id(), "source": source_key, "text": reply, "at": _now()}
-                )
-            else:
-                self._send_json({"error": f"ローカルLLMに接続できませんでした: {error}"}, 502)
-                return
-            case["updated_at"] = _now()
+            job = {
+                "id": uuid.uuid4().hex[:12],
+                "case_id": case_id,
+                "target_key": target_key,
+                "target_label": target.get("label") or target_key,
+                "status": "queued",
+                "created_at": _now(),
+                "started_at": None,
+                "completed_at": None,
+                "error": None,
+            }
+            store.setdefault("jobs", {})[job["id"]] = job
             save_store(store)
-        self._send_json({"case": case})
+        threading.Thread(target=run_local_llm_job, args=(job["id"],), daemon=True).start()
+        self._send_json({"job": job}, 202)
 
     def _update_destinations(self):
         body = self._read_json()
