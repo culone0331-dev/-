@@ -1,0 +1,24 @@
+name: Verify AI Work Hub
+
+on:
+  push:
+    paths:
+      - "outputs/AI-Work-Hub/**"
+      - ".github/workflows/verify-ai-work-hub.yml"
+  pull_request:
+    paths:
+      - "outputs/AI-Work-Hub/**"
+      - ".github/workflows/verify-ai-work-hub.yml"
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check Python server syntax
+        run: python -m py_compile outputs/AI-Work-Hub/server.py
+      - name: Check browser code syntax
+        run: node --check outputs/AI-Work-Hub/app.js
