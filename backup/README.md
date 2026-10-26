@@ -4,7 +4,7 @@
 
 | OS | ファイル | コピー対象 |
 |---|---|---|
-| Windows | `windows_backup_to_nas.bat` | `C:\Users\<自分>`（ドキュメント・写真・デスクトップ・ダウンロード等） |
+| Windows | `windows_backup_to_nas.bat` | `C:\Users\<自分>`（ドキュメント・写真・デスクトップ・ダウンロード等）と D ドライブ全体 |
 | Mac | `mac_backup_to_nas.sh` | `~/`（書類・写真・デスクトップ・ダウンロード等） |
 
 アプリの設定フォルダ（Windows の `AppData`、Mac の `Library`）は対象外です。

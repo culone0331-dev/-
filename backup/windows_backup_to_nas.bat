@@ -21,21 +21,34 @@ if not exist "%NAS%\" (
 )
 if not exist "%DEST%\logs" mkdir "%DEST%\logs"
 
-echo === ユーザーフォルダ（ドキュメント・写真・デスクトップ・ダウンロード等）をコピー中 ===
+set "FAILED=0"
+
+echo === 1/2 ユーザーフォルダ（ドキュメント・写真・デスクトップ・ダウンロード等）をコピー中 ===
 rem /E: サブフォルダも含めてコピー（NAS 側のファイルは削除しない）
 rem 変更のあったファイルだけをコピーするので、途中で止めても再実行すれば続きから進みます
 robocopy "%USERPROFILE%" "%DEST%\%USERNAME%" /E /COPY:DAT /DCOPY:T /R:1 /W:1 /XJ /MT:16 /NP ^
   /XD "%USERPROFILE%\AppData" ^
   /XF ntuser.dat* NTUSER.DAT* UsrClass.dat* *.tmp ^
-  /LOG:"%DEST%\logs\backup_%STAMP%.log" /TEE
+  /LOG:"%DEST%\logs\users_%STAMP%.log" /TEE
+if %ERRORLEVEL% GEQ 8 set "FAILED=1"
 
-if %ERRORLEVEL% GEQ 8 (
-  echo.
-  echo [警告] 一部のファイルをコピーできませんでした。ログを確認してください:
-  echo %DEST%\logs\backup_%STAMP%.log
+echo.
+echo === 2/2 D ドライブ（DATA）をコピー中 ===
+if exist "D:\" (
+  robocopy "D:\" "%DEST%\D_drive" /E /COPY:DAT /DCOPY:T /R:1 /W:1 /XJ /MT:16 /NP ^
+    /XD "$RECYCLE.BIN" "System Volume Information" ^
+    /LOG:"%DEST%\logs\d_drive_%STAMP%.log" /TEE
+  if errorlevel 8 set "FAILED=1"
 ) else (
-  echo.
-  echo バックアップが完了しました: %DEST%\%USERNAME%
+  echo D ドライブが見つからないためスキップしました。
+)
+
+echo.
+if "%FAILED%"=="1" (
+  echo [警告] 一部のファイルをコピーできませんでした。ログを確認してください:
+  echo %DEST%\logs\
+) else (
+  echo バックアップが完了しました: %DEST%
 )
 pause
 endlocal
