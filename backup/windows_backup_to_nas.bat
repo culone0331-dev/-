@@ -8,7 +8,7 @@ chcp 65001 >nul
 setlocal
 
 rem ▼ NAS の共有フォルダ（例: \\192.168.1.10\backup や \\NAS\backup）
-set "NAS=\\192.168.0.10\backup"
+set "NAS=\\CULONE-SERVER\backup"
 
 set "DEST=%NAS%\%COMPUTERNAME%"
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "STAMP=%%i"
