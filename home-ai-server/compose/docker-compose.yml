@@ -1,0 +1,73 @@
+# 新構成の下書き（未デプロイ）。現状調査の結果を受けてイメージのバージョン・ボリューム名を確定させる。
+#
+# 方針
+#   - コンテナのポートはすべて 127.0.0.1 にだけ公開する（LAN・インターネットからは直接届かない）
+#   - スマホからは Tailscale serve（tailnet 内だけの HTTPS）経由でアクセスする
+#   - Ollama / Strata は GPU を直接使うため Windows ネイティブで動かし、コンテナからは host.docker.internal で呼ぶ
+#   - 既存データを引き継ぐ場合は、volumes の external: true + 既存ボリューム名に切り替える
+#
+# 起動: docker compose --env-file .env up -d   （承認後）
+
+name: home-ai
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:${OPEN_WEBUI_VERSION:?調査結果のバージョンを .env に設定}
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:8080"
+    environment:
+      # Ollama（Windows ネイティブ）
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Strata が OpenAI 互換 API の場合のみ有効化（URL・キーは調査結果で確定）
+      ENABLE_OPENAI_API: ${STRATA_OPENAI_COMPAT:-false}
+      OPENAI_API_BASE_URL: ${STRATA_API_BASE_URL:-}
+      OPENAI_API_KEY: ${STRATA_API_KEY:-}
+      # 認証必須・新規登録は管理者承認制
+      WEBUI_AUTH: "true"
+      ENABLE_SIGNUP: "false"
+      DEFAULT_USER_ROLE: pending
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?.env に設定}
+      WEBUI_URL: https://${TS_HOSTNAME}.${TS_TAILNET}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - open-webui-data:/app/backend/data
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:?調査結果のバージョンを .env に設定}
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      # ★ 既存の暗号化キーをそのまま使う（変えると保存済み認証情報が復号できなくなる）
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?既存キーを .env に設定}
+      N8N_HOST: ${TS_HOSTNAME}.${TS_TAILNET}
+      N8N_PROTOCOL: https
+      N8N_PORT: "5678"
+      WEBHOOK_URL: https://${TS_HOSTNAME}.${TS_TAILNET}:8443/
+      N8N_SECURE_COOKIE: "true"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      GENERIC_TIMEZONE: Asia/Tokyo
+      TZ: Asia/Tokyo
+      N8N_RUNNERS_ENABLED: "true"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - n8n-data:/home/node/.n8n
+      # NAS 保存用（n8n からファイル出力する場合）。NAS 既存データを触らないよう専用サブフォルダのみをマウント
+      # - type: bind
+      #   source: ${NAS_N8N_DIR}
+      #   target: /data/nas
+
+volumes:
+  open-webui-data:
+    # 既存ボリュームを引き継ぐ場合:
+    # external: true
+    # name: <調査で判明した既存ボリューム名>
+  n8n-data:
+    # external: true
+    # name: <調査で判明した既存ボリューム名>

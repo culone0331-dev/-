@@ -6,8 +6,18 @@ Ollama・Strata・Open WebUI・n8n・Tailscale・UGREEN NAS の構成を再構�
 | 段階 | 内容 | 状態 |
 |---|---|---|
 | 第1段階 | 現状調査（読み取り専用） | **スクリプト準備済み → MS-02 で実行待ち** |
-| 第2段階 | 再構築計画 | 調査結果を受けて作成 |
-| 第3段階 | バックアップ → 復元確認 → 整理・再構築 | 承認後に実施 |
+| 第2段階 | 再構築計画 | **下書き済み**（`docs/phase2-plan.md`）→ 調査結果で確定 |
+| 第3段階 | バックアップ → 復元確認 → 整理・再構築 | **スクリプト下書き済み**（`backup/`, `compose/`）→ 承認後に実施 |
+
+## ファイル
+
+| パス | 内容 |
+|---|---|
+| `survey/Invoke-AiServerSurvey.ps1` | 第1段階 現状調査（読み取り専用） |
+| `docs/phase2-plan.md` | 第2段階 再構築計画の下書き（構成・手順・リスク） |
+| `backup/Backup-AiServer.ps1` | 第3段階 バックアップ（既定は確認モード。`-Execute` で実行） |
+| `compose/docker-compose.yml` | 新構成の下書き（Open WebUI + n8n、127.0.0.1 限定公開） |
+| `compose/.env.example` | 上記の設定テンプレート（`.env` は Git に入れない） |
 
 ## 作業ルール
 
